@@ -7,6 +7,7 @@
 """
 from __future__ import annotations
 
+import asyncio
 import json
 from pathlib import Path
 from typing import Any, Optional
@@ -88,22 +89,32 @@ class TsukiyoPetPlugin(Star):
         return f"{base}/pet/audio/{name}"
 
     async def _say(self, text: str) -> tuple[bool, str]:
-        """推一个气泡；开了语音就先合成再一起推。返回 (是否有客户端在线, 附加说明)。"""
+        """推一个气泡；开了语音就异步合成，合好再推一条带音频的指令。
+
+        语音合成要 1~4 秒，绝不能卡住 QQ 回复——所以气泡先推，音频后台补。
+        """
         bubble_text = protocol.clamp_text(text, int(self._cfg("bubble_max_chars") or 40))
         item = protocol.bubble(bubble_text)
         if item is None:
             return False, "内容为空"
+        online = self.hub.push(item)
+        if not online:
+            return False, "桌宠不在线"
         if self.tts is not None:
-            try:
-                wav = await self.tts.synthesize(text)
-                url = self._audio_url(wav.name)
-                online = self.hub.push(protocol.speak(url, bubble_text))
-                if online:
-                    return True, f"（语音 {wav.name}）"
-            except TTSError as exc:
-                logger.warning("[tsukiyo_pet] 语音失败，只发气泡：%s", exc)
-        ok = self.hub.push(item)
-        return ok, "" if ok else "桌宠不在线"
+            asyncio.create_task(self._speak_async(str(text)))
+        return True, ""
+
+    async def _speak_async(self, text: str) -> None:
+        if self.tts is None:
+            return
+        try:
+            wav = await self.tts.synthesize(text)
+        except TTSError as exc:
+            logger.warning("[tsukiyo_pet] 语音合成失败：%s", exc)
+            return
+        # 气泡已经在前面显示过，这里只带声音，不重复弹字
+        if not self.hub.push(protocol.speak(self._audio_url(wav.name), "")):
+            logger.info("[tsukiyo_pet] 语音已生成但桌宠不在线：%s", wav.name)
 
     # ------------------------------------------------------------------ 命令
     @filter.command("pet")
@@ -234,3 +245,4 @@ class TsukiyoPetPlugin(Star):
     async def terminate(self) -> None:
         if self.http is not None:
             self.http.stop()
+

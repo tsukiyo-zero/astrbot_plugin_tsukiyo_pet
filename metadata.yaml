@@ -1,4 +1,4 @@
-﻿name: astrbot_plugin_tsukiyo_pet
+name: astrbot_plugin_tsukiyo_pet
 display_name: 月夜宠物
 short_desc: 桌面透明桌宠（气泡/动作/语音）
 desc: 把 AstrBot 接成桌面上的透明桌宠：QQ 回复同步成气泡，点它拖它、让它做动作都由模型决定，可选接 GPT-SoVITS 说话。HTTP 解耦，Docker 部署也能用。
@@ -8,4 +8,4 @@ repo: https://github.com/tsukiyo-zero/astrbot_plugin_tsukiyo_pet
 support_platforms:
   - aiocqhttp
   - qq_official
-tags: [桌宠, 桌面, 语音, 娱乐]
+tags: [桌宠, 桌面, 语音, 娱乐]
