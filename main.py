@@ -171,9 +171,12 @@ class TsukiyoPetPlugin(Star):
         yield event.plain_result("用法：/pet status | say <文本> | action <动作> | mode <模式>")
 
     # ------------------------------------------------------------------ 回复同步
-    @filter.on_decorating_result()
+    # 优先级高的先跑（AstrBot: sort(key=-priority)）。
+    # 这里必须抢在 GPT_SoVITS（priority=14）之前，否则它会把 Plain 文字全删掉、
+    # 只留一条没有 text 的 Record，桌宠就既没气泡也没声音。
+    @filter.on_decorating_result(priority=20)
     async def sync_bubble(self, event: AstrMessageEvent):
-        """主人的私聊回复同步到桌宠气泡（开了语音就一起说）。"""
+        """主人的私聊回复同步到桌宠气泡（只取文字，语音交给后面的钩子决定）。"""
         if not bool(self._cfg("bubble_enabled", True)):
             return
         if not self._is_owner(event):
@@ -183,10 +186,45 @@ class TsukiyoPetPlugin(Star):
         text = self._result_text(event)
         if not text:
             return
+        event.set_extra("tsukiyo_pet_text", text)
         try:
-            await self._say(text)
+            bubble_text = protocol.clamp_text(text, int(self._cfg("bubble_max_chars") or 40))
+            self.hub.push(protocol.bubble(bubble_text))
         except Exception as exc:  # pragma: no cover - 同步失败不能影响正常回复
             logger.warning("[tsukiyo_pet] 气泡同步失败：%s", exc)
+
+    @filter.on_decorating_result(priority=-100)
+    async def maybe_speak(self, event: AstrMessageEvent):
+        """最后一道：回复里没有语音才让我们自己合成，避免和机器人自带的语音重复。"""
+        if self.tts is None:
+            return
+        if not self._is_owner(event):
+            return
+        if self.hub.primary() is None:
+            return
+        text = str(event.get_extra("tsukiyo_pet_text") or "").strip()
+        if not text:
+            return
+        if self._has_record(event):
+            # 机器人自己会发语音（GPT_SoVITS 已经把文字换成了 Record），别再抢一份
+            return
+        try:
+            await self._speak_async(text)
+        except Exception as exc:  # pragma: no cover
+            logger.warning("[tsukiyo_pet] 语音同步失败：%s", exc)
+
+    @staticmethod
+    def _has_record(event: AstrMessageEvent) -> bool:
+        """回复链里是否已经有语音（Record）组件。"""
+        try:
+            result = event.get_result()
+        except Exception:  # pragma: no cover
+            return False
+        chain = getattr(result, "chain", None) if result is not None else None
+        for seg in chain or []:
+            if type(seg).__name__ == "Record":
+                return True
+        return False
 
     @staticmethod
     def _result_text(event: AstrMessageEvent) -> str:
