@@ -114,6 +114,24 @@
         "type": "int",
         "default": 12,
         "hint": "超过上限就把剩余文本合并成最后一段，防止长文把 SoVITS 打满（每段一次请求）。"
+      },
+      "max_candidates": {
+        "description": "每段最多合成几条择优",
+        "type": "int",
+        "default": 2,
+        "hint": "SoVITS 的句末重音是随机的（实测同一句能 +0 / +137 / -16 Hz），只降 temperature 治不干净。默认生成 2 条，挑不吞字且句末音调不甩的那条；设为 1 关闭。"
+      },
+      "spike_hz": {
+        "description": "句末音调容忍度（Hz）",
+        "type": "float",
+        "default": 45,
+        "hint": "句末 0.45 秒的音高相对全句偏多少算\"怪\"。越大越不敏感。"
+      },
+      "takeover_bot_voice": {
+        "description": "接管机器人自己的语音",
+        "type": "bool",
+        "default": false,
+        "hint": "开启后，当回复里已经有语音（比如 GPT_SoVITS 插件生成的），改用本插件重新合成并替换掉，好处是享受分段/择优/响度归一，代价是多花一次合成时间。默认关闭（沿用机器人自带语音）。"
       }
     }
   }

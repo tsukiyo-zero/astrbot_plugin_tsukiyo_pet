@@ -166,3 +166,75 @@ def compose(parts: list[tuple[bytes, int]], target_rms: float = 3300.0) -> bytes
 def wav_seconds(data: bytes) -> float:
     with wave.open(io.BytesIO(data), "rb") as w:
         return w.getnframes() / float(w.getframerate() or 1)
+
+
+# ---------------------------------------------------------------- 句末音调体检
+#: 句末 0.45s 的 F0 相对全句偏离超过这个值，听起来就是"最后一个词忽然拔高"
+SPIKE_HZ = 45.0
+
+
+def _f0_in_range(samples: array, sr: int, start: int, end: int) -> list[float]:
+    """在 [start, end) 内逐帧估 F0（自相关 60~400Hz），返回有效帧。"""
+    frame = int(0.04 * sr)
+    hop = int(0.01 * sr)
+    lo, hi = int(sr / 400), int(sr / 60)
+    vals: list[float] = []
+    for s in range(start, max(start + 1, end - frame), hop):
+        seg = samples[s:s + frame]
+        if len(seg) < frame:
+            break
+        if _np is not None:
+            arr = _np.frombuffer(seg.tobytes(), dtype="<i2").astype("float32")
+            if float(_np.sqrt(_np.mean(arr ** 2))) < 260:   # ≈ -42 dBFS，静音跳过
+                continue
+            arr = arr - arr.mean()
+            ac = _np.correlate(arr, arr, mode="full")[frame - 1:]
+            if ac[0] <= 0:
+                continue
+            ac = ac / ac[0]
+            if hi >= len(ac):
+                continue
+            peak = int(_np.argmax(ac[lo:hi])) + lo
+            if float(ac[peak]) >= 0.30:
+                vals.append(sr / peak)
+        else:  # pragma: no cover - 没有 numpy 的慢速路径
+            floats = [float(v) for v in seg]
+            if math.sqrt(sum(v * v for v in floats) / len(floats)) < 260:
+                continue
+            mean = sum(floats) / len(floats)
+            floats = [v - mean for v in floats]
+            den = sum(v * v for v in floats)
+            if den <= 0:
+                continue
+            best_r, best_lag = 0.0, 0
+            for lag in range(lo, min(hi, len(floats) - 1)):
+                num = sum(floats[i] * floats[i + lag] for i in range(len(floats) - lag))
+                r = num / den
+                if r > best_r:
+                    best_r, best_lag = r, lag
+            if best_lag and best_r >= 0.30:
+                vals.append(sr / best_lag)
+    return vals
+
+
+def final_pitch_delta(data: bytes, tail_seconds: float = 0.45) -> float:
+    """句末 F0 相对全句中位的偏离（Hz）。正=上扬，负=收尾下沉，0=量不出来。"""
+    try:
+        samples, sr = read_pcm(data)
+    except (ValueError, wave.Error):
+        return 0.0
+    total = len(samples)
+    if total < sr * 0.6:
+        return 0.0
+    all_f0 = sorted(_f0_in_range(samples, sr, 0, total))
+    tail_f0 = sorted(_f0_in_range(samples, sr, max(0, total - int(tail_seconds * sr)), total))
+    if len(all_f0) < 8 or len(tail_f0) < 3:
+        return 0.0
+    return tail_f0[len(tail_f0) // 2] - all_f0[len(all_f0) // 2]
+
+
+def needs_retry(data: bytes, chars: int, spike_hz: float = SPIKE_HZ) -> bool:
+    """吞字（太快）或句末音调甩太远，都值得再合成一条择优。"""
+    if is_truncated(wav_seconds(data), chars):
+        return True
+    return abs(final_pitch_delta(data)) > spike_hz

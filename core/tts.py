@@ -86,20 +86,45 @@ class SoVITSClient:
         self._log(f"语音已生成：{name}（{len(data) // 1024} KB）{note}")
         return target
 
+    async def _best_of(self, text: str, chars: int, base_speed: float,
+                       candidates: int, spike_hz: float, tag: str) -> bytes:
+        """合成 1~N 条，按「不吞字 + 句末音调不甩」择优。
+
+        SoVITS 的句末重音是随机的（实测同一句能 +0 / +137 / -16 Hz），
+        光降 temperature 治不干净，多来一条挑更顺的才靠谱。
+        """
+        best: tuple[float, bytes] | None = None
+        speed = base_speed
+        for attempt in range(max(1, candidates)):
+            data = await self._request(text, speed)
+            seconds = voice.wav_seconds(data)
+            delta = voice.final_pitch_delta(data)
+            truncated = voice.is_truncated(seconds, chars)
+            score = (1000.0 if truncated else 0.0) + abs(delta)
+            if best is None or score < best[0]:
+                best = (score, data)
+            if not truncated and abs(delta) <= spike_hz:
+                break
+            if truncated:
+                speed = round(max(0.7, speed - 0.05), 2)
+                self._log(f"{tag}疑似吞字（{seconds:.2f}s/{chars}字），降到 {speed} 重试")
+            else:
+                self._log(f"{tag}句末音调偏了 {delta:+.0f} Hz，再合成一条择优")
+        assert best is not None
+        return best[1]
+
     async def synthesize(self, text: str) -> Path:
         """短句直接合成；长句（可配置）走分段合成 + 段间留白 + 音量和响度归一。"""
         base_speed = _num(self.cfg.get("speed_factor"), 0.9)
         chars = voice.visible_chars(text)
+        candidates = max(1, min(3, int(_num(self.cfg.get("max_candidates"), 2))))
+        spike_hz = _num(self.cfg.get("spike_hz"), voice.SPIKE_HZ)
 
         segmented = bool(self.cfg.get("segment_long", True)) and chars >= int(
             _num(self.cfg.get("segment_min_chars"), 40)
         )
         if not segmented:
-            data = await self._request(text, base_speed)
-            if voice.is_truncated(voice.wav_seconds(data), chars):
-                slower = max(0.8, base_speed - 0.05)
-                self._log(f"短句疑似吞字（{voice.wav_seconds(data):.2f}s/{chars}字），降到 {slower} 重试")
-                data = await self._request(text, slower)
+            data = await self._best_of(text, chars, base_speed, candidates, spike_hz, "短句")
             return self._save(data)
 
         segments = voice.split_text(
@@ -109,14 +134,8 @@ class SoVITSClient:
         )
         parts: list[tuple[bytes, int]] = []
         for i, seg in enumerate(segments, 1):
-            seg_chars = voice.visible_chars(seg)
-            data, used = b"", base_speed
-            for speed in (base_speed, base_speed - 0.05, base_speed - 0.10):
-                speed = round(max(0.7, speed), 2)
-                data, used = await self._request(seg, speed), speed
-                if not voice.is_truncated(voice.wav_seconds(data), seg_chars):
-                    break
-                self._log(f"第 {i}/{len(segments)} 段疑似吞字，降到 {speed} 重试")
+            data = await self._best_of(seg, voice.visible_chars(seg), base_speed,
+                                       candidates, spike_hz, f"第 {i}/{len(segments)} 段")
             parts.append((data, voice.gap_ms(seg)))
         merged = voice.compose(parts)
         return self._save(merged, f"（{len(segments)} 段拼接，{voice.wav_seconds(merged):.1f}s）")

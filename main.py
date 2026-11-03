@@ -195,23 +195,49 @@ class TsukiyoPetPlugin(Star):
 
     @filter.on_decorating_result(priority=-100)
     async def maybe_speak(self, event: AstrMessageEvent):
-        """最后一道：回复里没有语音才让我们自己合成，避免和机器人自带的语音重复。"""
+        """最后一道：决定这条回复的声音由谁来发。
+
+        - 回复里没有语音 → 我们自己合成
+        - 回复里已有语音（GPT_SoVITS 把文字换成了 Record）：
+          * `takeover_bot_voice=false`（默认）→ 不重复发，沿用机器人自带的
+          * `takeover_bot_voice=true` → 用我们的分段 + 择优重做一遍，替换掉链里那条
+        """
         if self.tts is None:
             return
         if not self._is_owner(event):
             return
-        if self.hub.primary() is None:
-            return
         text = str(event.get_extra("tsukiyo_pet_text") or "").strip()
         if not text:
             return
-        if self._has_record(event):
-            # 机器人自己会发语音（GPT_SoVITS 已经把文字换成了 Record），别再抢一份
+        has_record = self._has_record(event)
+        if has_record and not bool(self._cfg("takeover_bot_voice", False)):
             return
         try:
-            await self._speak_async(text)
-        except Exception as exc:  # pragma: no cover
+            wav = await self.tts.synthesize(text)
+        except Exception as exc:  # pragma: no cover - 合成失败不能影响回复
             logger.warning("[tsukiyo_pet] 语音同步失败：%s", exc)
+            return
+
+        if self.hub.primary() is not None:      # 桌宠也播一份
+            self.hub.push(protocol.speak(self._audio_url(wav.name), ""))
+        if has_record:                          # 替换机器人那条，免得双重声音
+            self._replace_record(event, wav)
+
+    def _replace_record(self, event: AstrMessageEvent, wav_path) -> None:
+        """把回复链里的 Record 换成我们合成的文件。"""
+        try:
+            from astrbot.core.message.components import Record
+
+            result = event.get_result()
+            chain = getattr(result, "chain", None) if result is not None else None
+            if not chain:
+                return
+            keep = [seg for seg in chain if type(seg).__name__ != "Record"]
+            keep.append(Record.fromFileSystem(str(wav_path)))
+            chain[:] = keep
+            logger.info("[tsukiyo_pet] 已用本插件语音替换机器人自带语音：%s", Path(wav_path).name)
+        except Exception as exc:  # pragma: no cover
+            logger.warning("[tsukiyo_pet] 替换机器人语音失败：%s", exc)
 
     @staticmethod
     def _has_record(event: AstrMessageEvent) -> bool:
