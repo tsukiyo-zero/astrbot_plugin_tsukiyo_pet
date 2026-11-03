@@ -34,7 +34,7 @@ DIRECTIONS: dict[str, str] = {
 MODES = ("idle", "wander", "follow")
 
 #: 客户端会报上来的身体事件
-EVENT_KINDS = ("click", "drag", "feed", "mode", "move_done", "hello")
+EVENT_KINDS = ("click", "drag", "feed", "mode", "move_done", "hello", "bubble_shown")
 
 MAX_TEXT = 300
 
@@ -108,3 +108,4 @@ def clamp_text(text: str, limit: int = 40) -> str:
     if buf.strip():
         chunks.append(buf.strip())
     return "\n".join(c for c in chunks if c)[: MAX_TEXT * 2]
+

@@ -104,7 +104,8 @@ class PetHTTP:
                 if path == "/pet/health":
                     snap = api.hub.snapshot()
                     self._send(200, {"ok": True, "online": snap["online"],
-                                     "clients": snap["clients"], "audio_hits": api.audio_hits})
+                                     "clients": snap["clients"], "audio_hits": api.audio_hits,
+                                     "events": snap["events"][-5:]})
                     return
                 if path == "/pet/poll":
                     cid = (query.get("client_id") or [""])[0]
