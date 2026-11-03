@@ -174,6 +174,25 @@ class TestTTS(unittest.TestCase):
         self.assertEqual(payload["text_split_method"], "cut0")
         self.assertEqual(payload["media_type"], "wav")
 
+    def test_payload_carries_sampling_params(self) -> None:
+        """不传采样参数时服务端 temperature=1.0，语调会飘、偶发吞字，必须显式给默认值。"""
+        payload = build_payload("你好", {"ref_audio_path": "/x/y.wav"})
+        self.assertEqual(payload["temperature"], 0.85)
+        self.assertEqual(payload["top_k"], 12)
+        self.assertEqual(payload["repetition_penalty"], 1.35)
+        self.assertEqual(payload["seed"], -1)
+
+    def test_payload_sampling_overrides(self) -> None:
+        payload = build_payload("你好", {"ref_audio_path": "/x/y.wav",
+                                         "temperature": 0.7, "top_k": 10, "seed": 42})
+        self.assertEqual(payload["temperature"], 0.7)
+        self.assertEqual(payload["top_k"], 10)
+        self.assertEqual(payload["seed"], 42)
+
+    def test_payload_bad_number_falls_back(self) -> None:
+        payload = build_payload("你好", {"ref_audio_path": "/x/y.wav", "temperature": "abc"})
+        self.assertEqual(payload["temperature"], 0.85)
+
 
 class TestConcurrency(unittest.TestCase):
     def test_many_threads_push_poll(self) -> None:
