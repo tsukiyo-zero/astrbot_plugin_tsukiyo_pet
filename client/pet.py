@@ -25,7 +25,7 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
-from PySide6.QtCore import QPoint, QPropertyAnimation, QRectF, Qt, QTimer, QUrl
+from PySide6.QtCore import QPoint, QPointF, QPropertyAnimation, QRectF, Qt, QTimer, QUrl
 from PySide6.QtGui import (QAction, QColor, QCursor, QFont, QFontInfo, QFontMetrics, QPainter,
                            QPen, QPixmap, QPolygonF)
 from PySide6.QtWidgets import QApplication, QLabel, QMenu, QSystemTrayIcon, QWidget
@@ -260,6 +260,14 @@ class Bubble(QWidget):
     # ---------- 绘制 ----------
     def paintEvent(self, event) -> None:  # noqa: N802 - Qt 命名
         painter = QPainter(self)
+        try:
+            self._paint(painter)
+        except Exception as exc:  # 画崩了不能让整个桌宠跟着挂
+            log("气泡绘制失败：" + str(exc))
+        finally:
+            painter.end()
+
+    def _paint(self, painter: QPainter) -> None:
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
         painter.setRenderHint(QPainter.RenderHint.TextAntialiasing, True)
 
