@@ -245,4 +245,4 @@ class TsukiyoPetPlugin(Star):
     async def terminate(self) -> None:
         if self.http is not None:
             self.http.stop()
-
+

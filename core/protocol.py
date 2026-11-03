@@ -108,4 +108,4 @@ def clamp_text(text: str, limit: int = 40) -> str:
     if buf.strip():
         chunks.append(buf.strip())
     return "\n".join(c for c in chunks if c)[: MAX_TEXT * 2]
-
+
