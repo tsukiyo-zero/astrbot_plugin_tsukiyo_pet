@@ -96,6 +96,24 @@
         "type": "int",
         "default": -1,
         "hint": "-1 = 每次随机；固定数字则同一句每次读法完全一致（调试/复现用）。"
+      },
+      "segment_long": {
+        "description": "长句分段合成",
+        "type": "bool",
+        "default": true,
+        "hint": "整段一次性合成会把长文读得很赶（实测 0.153 s/字，原声 0.262），且整篇语调会被一条随机轨迹带跑。开启后按句切段、逐段定调、段间按标点留白，并带吞字重试。短回复（少于 segment_min_chars）仍走单次合成。"
+      },
+      "segment_min_chars": {
+        "description": "触发分段的最少字数",
+        "type": "int",
+        "default": 40,
+        "hint": "低于这个字数不切段，避免短句多打几次请求。"
+      },
+      "max_segments": {
+        "description": "最多切几段",
+        "type": "int",
+        "default": 12,
+        "hint": "超过上限就把剩余文本合并成最后一段，防止长文把 SoVITS 打满（每段一次请求）。"
       }
     }
   }
