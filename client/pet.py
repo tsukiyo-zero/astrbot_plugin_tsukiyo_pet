@@ -13,6 +13,7 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 import queue
 import random
@@ -362,6 +363,17 @@ class Bubble(QWidget):
 
 
 class Pet(QWidget):
+    """桌宠窗口：底图 + 程序化动画（呼吸/眨眼/阴影/惯性/动作曲线）。
+
+    刻意不引入 Live2D：先用「有生命感的程序动画」把静态立绘撑起来，
+    素材升级（表情差分/动作视频）走另一条线。
+    """
+
+    SHADOW_H = 18          # 底部阴影预留高度
+    LIFT_SPACE = 24        # 顶部预留的跳跃空间（不预留会把角色裁掉）
+    BREATH_PERIOD = 3.4    # 呼吸周期（秒）
+    BREATH_AMP = 2         # 呼吸幅度（像素）
+
     def __init__(self, cfg: dict) -> None:
         super().__init__()
         self.cfg = cfg
@@ -373,10 +385,15 @@ class Pet(QWidget):
         self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
 
         self.sprites = self._load_sprites()
+        self.base_pix = self.sprites["front"]
+        self.base_w = self.base_pix.width()
+        self.base_h = self.base_pix.height()
+
         self.label = QLabel(self)
-        self.label.setPixmap(self.sprites["front"])
-        self.label.resize(self.sprites["front"].size())
-        self.resize(self.sprites["front"].size())
+        self.label.setPixmap(self.base_pix)
+        self.label.resize(self.base_w, self.base_h)
+        self.label.move(0, self.LIFT_SPACE)
+        self.resize(self.base_w, self.base_h + self.SHADOW_H + self.LIFT_SPACE)
 
         self.bubble = Bubble()
         self.mode = "idle"
@@ -384,9 +401,21 @@ class Pet(QWidget):
         self.facing = "front"
         self._drag_from: QPoint | None = None
         self._drag_win: QPoint | None = None
-        self._bob = 0
-        self._act_until = 0.0
+
+        # 动画状态
+        self._t0 = time.perf_counter()
         self._act = ""
+        self._act_start = 0.0
+        self._act_dur = 0.0
+        self._act_data: dict = {}
+        self._emotion = ""
+        self._emotion_until = 0.0
+        self._blink_at = time.perf_counter() + random.uniform(2.0, 5.0)
+        self._blink_until = 0.0
+        self._squash_until = 0.0
+        self._fidget_at = time.perf_counter() + random.uniform(12.0, 26.0)
+        self._vel = [0.0, 0.0]
+        self._last_drag_t = 0.0
 
         self.bridge = Bridge(str(cfg["base_url"]), str(cfg["client_id"]),
                              int(cfg.get("poll_ms") or 500), float(cfg.get("heartbeat_s") or 5))
@@ -403,33 +432,65 @@ class Pet(QWidget):
 
         self.ui_timer = QTimer(self)
         self.ui_timer.timeout.connect(self._tick)
-        self.ui_timer.start(50)
+        self.ui_timer.start(16)          # ~60fps，动效才顺
 
         self.poll_timer = QTimer(self)
         self.poll_timer.timeout.connect(self._drain)
         self.poll_timer.start(int(cfg.get("poll_ms") or 500))
-
 
         self._make_tray()
 
     # ---------- 素材 ----------
     def _load_sprites(self) -> dict[str, QPixmap]:
         out: dict[str, QPixmap] = {}
-        for key, name in (("front", "正面_187.png"), ("side", "侧面_187.png"), ("back", "背面_187.png")):
+        mapping = (("front", "正面_187.png"), ("side", "侧面_187.png"),
+                   ("back", "背面_187.png"), ("blink", "闭眼_187.png"))
+        for key, name in mapping:
             path = SPRITES / name
             if not path.exists():
-                path = SPRITES / "正面.png"
+                continue
             pix = QPixmap(str(path))
-            if self.scale != 1.0 and not pix.isNull():
+            if pix.isNull():
+                continue
+            if self.scale != 1.0:
                 pix = pix.scaled(int(pix.width() * self.scale), int(pix.height() * self.scale),
                                  Qt.AspectRatioMode.KeepAspectRatio,
                                  Qt.TransformationMode.SmoothTransformation)
             out[key] = pix
+        if "front" not in out:                      # 兜底
+            for fallback in ("正面.png", "icon.png"):
+                path = SPRITES / fallback
+                if path.exists():
+                    pix = QPixmap(str(path))
+                    if not pix.isNull():
+                        out["front"] = pix
+                        break
+        for key in ("side", "back"):
+            out.setdefault(key, out.get("front"))
         return out
 
     def _move_home(self) -> None:
         screen = QApplication.primaryScreen().availableGeometry()
         self.move(screen.right() - self.width() - 60, screen.bottom() - self.height() - 20)
+
+    # ---------- 绘制（阴影）----------
+    def paintEvent(self, event) -> None:  # noqa: N802 - Qt 命名
+        painter = QPainter(self)
+        try:
+            lift = getattr(self, "_lift", 0.0)      # 跳起来的高度，影响阴影
+            fade = max(0.25, 1.0 - lift / 26.0)
+            w = self.base_w * (0.62 - min(0.18, lift / 140.0))
+            h = 10 * fade
+            x = self.width() / 2 - w / 2
+            y = self.height() - self.SHADOW_H + (self.SHADOW_H - h) / 2
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(QColor(30, 40, 60, int(70 * fade)))
+            painter.drawEllipse(QRectF(x, y, w, h))
+        except Exception as exc:  # 阴影画坏不影响桌宠
+            log("阴影绘制失败：" + str(exc))
+        finally:
+            painter.end()
 
     # ---------- UI ----------
     def _make_tray(self) -> None:
@@ -451,7 +512,8 @@ class Pet(QWidget):
 
     def contextMenuEvent(self, event) -> None:  # noqa: N802 - Qt 命名
         menu = QMenu(self)
-        for text, act in (("跳一下", "jump"), ("摇一摇", "shake"), ("伸个懒腰", "stretch"), ("挥手", "wave")):
+        for text, act in (("跳一下", "jump"), ("摇一摇", "shake"), ("伸个懒腰", "stretch"),
+                          ("挥手", "wave"), ("开心", "happy"), ("难过", "sad")):
             a = QAction(text, menu)
             a.triggered.connect(lambda _=False, k=act: self._do_action(k))
             menu.addAction(a)
@@ -470,13 +532,21 @@ class Pet(QWidget):
         if event.button() == Qt.MouseButton.LeftButton:
             self._drag_from = event.globalPosition().toPoint()
             self._drag_win = self.pos()
+            self._vel = [0.0, 0.0]
+            self._last_drag_t = time.perf_counter()
             self.bridge.report("click", x=self.x(), y=self.y())
 
     def mouseMoveEvent(self, event) -> None:  # noqa: N802
         if self._drag_from is None or self._drag_win is None:
             return
-        delta = event.globalPosition().toPoint() - self._drag_from
-        self.move(self._drag_win + delta)
+        now = time.perf_counter()
+        pos = event.globalPosition().toPoint()
+        delta = pos - self._drag_from
+        new_pos = self._drag_win + delta
+        dt = max(0.001, now - self._last_drag_t)
+        self._vel = [(new_pos.x() - self.x()) / dt, (new_pos.y() - self.y()) / dt]
+        self._last_drag_t = now
+        self.move(new_pos)
         self.target = None
 
     def mouseReleaseEvent(self, event) -> None:  # noqa: N802
@@ -484,6 +554,11 @@ class Pet(QWidget):
             self.bridge.report("drag", x=self.x(), y=self.y())
             self._drag_from = None
             self._drag_win = None
+            # 甩出去太快就衰减掉，手感更"有重量"
+            speed = (self._vel[0] ** 2 + self._vel[1] ** 2) ** 0.5
+            if speed > 2600:
+                self._vel = [self._vel[0] * 0.05, self._vel[1] * 0.05]
+            self._squash_until = time.perf_counter() + 0.18
 
     # ---------- 行为 ----------
     def _set_mode(self, mode: str) -> None:
@@ -493,18 +568,31 @@ class Pet(QWidget):
         self._show_text({"idle": "好呀，我待着。", "wander": "那我到处走走～", "follow": "跟着你走~"}.get(mode, ""))
 
     def _do_action(self, name: str) -> None:
+        """动作/情绪：全部走时间轴插值，不再用整块位移。"""
+        name = str(name or "").strip().lower()
+        if name in ("happy", "sad", "angry", "surprised", "sleepy"):
+            self._emotion = name
+            self._emotion_until = time.perf_counter() + 6.0
+        dur = {
+            "jump": 0.62, "shake": 0.9, "stretch": 1.3, "wave": 1.1,
+            "happy": 1.3, "sad": 2.4, "angry": 1.2, "surprised": 0.7, "sleepy": 2.6,
+        }.get(name, 0.8)
         self._act = name
-        self._act_until = time.time() + {"jump": 0.6, "shake": 0.9, "stretch": 1.2, "wave": 1.0}.get(name, 0.8)
-        if name == "stretch":
-            self.label.setPixmap(self.sprites["back"])
-            QTimer.singleShot(1200, lambda: self.label.setPixmap(self.sprites[self.facing]))
+        self._act_start = time.perf_counter()
+        self._act_dur = dur
+        if name in ("stretch", "sleepy"):
+            self._set_sprite("back")
+            QTimer.singleShot(int(dur * 1000), lambda: self._set_sprite(self.facing))
+
+    def _set_sprite(self, key: str) -> None:
+        pix = self.sprites.get(key) or self.sprites["front"]
+        self.label.setPixmap(pix)
 
     def _bubble_anchor(self) -> QPoint:
         """桌宠头顶中点（全局坐标），气泡挂在这儿。"""
         return self.pos() + QPoint(self.width() // 2, 0)
 
     def _follow_bubble(self) -> None:
-        """拖动/散步/跟随时让气泡跟着走。"""
         if self.bubble.isVisible():
             self.bubble.move_near(self._bubble_anchor())
 
@@ -512,30 +600,22 @@ class Pet(QWidget):
         text = (text or "").strip()
         if not text:
             return
-        width = min(320, max(160, self.width() + 80))
         self.bubble.show_text(text, self._bubble_anchor(), int(self.cfg.get("bubble_ms") or 2800))
         self.bridge.report("bubble_shown", x=len(text))
 
     def _speak(self, url: str) -> None:
-        """播放语音：优先直接流式播放 URL（不落盘，避免目录不可写的问题）。"""
+        """播放语音：直接流式播放 URL（不落盘）。"""
         if not url:
-            log('speak: url 为空')
+            log("speak: url 为空")
             return
-        if not HAS_AUDIO:
-            log('speak: 缺少 QtMultimedia，装 PySide6 完整版')
+        if not (HAS_AUDIO and self.player):
+            log("speak: 没有播放器")
             return
-        if not self.player:
-            log('speak: 播放器未初始化')
-            return
-        log('speak: ' + str(url))
+        log("speak: " + str(url))
         try:
-            if url.startswith("http"):
-                self.player.setSource(QUrl(url))
-            else:
-                self.player.setSource(QUrl.fromLocalFile(url))
+            self.player.setSource(QUrl(url) if url.startswith("http") else QUrl.fromLocalFile(url))
             self.player.play()
-            log('speak: play() 之后 state=' + str(self.player.playbackState()))
-        except Exception as exc:  # pragma: no cover - 播放失败不影响气泡
+        except Exception as exc:  # pragma: no cover
             log("语音播放失败：" + str(exc))
 
     def _start_wander(self) -> None:
@@ -543,55 +623,118 @@ class Pet(QWidget):
         self.target = QPoint(random.randint(screen.left(), max(screen.left(), screen.right() - self.width())),
                              random.randint(screen.top(), max(screen.top(), screen.bottom() - self.height())))
 
+    # ---------- 每帧 ----------
     def _tick(self) -> None:
-        now = time.time()
-        # 动作：上下小跳
-        if self._act and now < self._act_until:
-            name = self._act
-            if name == "jump":
-                self.label.move(0, -abs(int(10 * (1 - (self._act_until - now) / 0.6))))
-            elif name == "shake":
-                self.label.move(int(6 * (1 if int(now * 20) % 2 else -1)), 0)
-            elif name == "wave":
-                self.label.move(int(4 * (1 if int(now * 8) % 2 else -1)), 0)
-        elif self._act:
-            self._act = ""
-            self.label.move(0, 0)
+        now = time.perf_counter()
+        t = now - self._t0
+        dx = dy = 0.0
 
-        # 移动
+        # 1) 拖动惯性
+        if self._drag_from is None:
+            vx, vy = self._vel
+            if abs(vx) > 2 or abs(vy) > 2:
+                nx, ny = self.x() + vx * 0.016, self.y() + vy * 0.016
+                screen = QApplication.primaryScreen().availableGeometry()
+                nx = max(screen.left(), min(screen.right() - self.width(), nx))
+                ny = max(screen.top(), min(screen.bottom() - self.height(), ny))
+                self.move(int(nx), int(ny))
+                self._vel = [vx * 0.86, vy * 0.86]
+            elif self._vel != [0.0, 0.0]:
+                self._vel = [0.0, 0.0]
+
+        # 2) 目标移动（缓动逼近，不是匀速）
         if self.target is not None:
-            dx = self.target.x() - self.x()
-            dy = self.target.y() - self.y()
-            if abs(dx) <= self.speed and abs(dy) <= self.speed:
+            gx, gy = self.target.x() - self.x(), self.target.y() - self.y()
+            dist = max(1.0, (gx * gx + gy * gy) ** 0.5)
+            if dist <= 3:
                 self.move(self.target)
                 self.target = None
                 self.bridge.report("move_done", x=self.x(), y=self.y())
             else:
-                self.move(self.x() + max(-self.speed, min(self.speed, dx)),
-                          self.y() + max(-self.speed, min(self.speed, dy)))
-                want = "side" if abs(dx) > 3 else self.facing
-                if want != self.facing:
-                    self.facing = want
-                    self.label.setPixmap(self.sprites[want])
-        elif self.mode == "wander" and random.random() < 0.01:
+                step = self.speed * (0.55 + min(1.0, dist / 240.0))
+                self.move(int(self.x() + gx / dist * step), int(self.y() + gy / dist * step))
+                if abs(gx) > 4:
+                    self.facing = "side"
+                    self._set_sprite("side")
+        elif self.mode == "wander" and t % 1.0 < 0.02:
             self._start_wander()
         elif self.mode == "follow":
             cursor = QCursor.pos()
-            if abs(cursor.x() - self.x()) > 120 or abs(cursor.y() - self.y()) > 80:
+            if abs(cursor.x() - self.x()) > 140 or abs(cursor.y() - self.y()) > 90:
                 self.target = QPoint(cursor.x() - self.width() // 2, cursor.y() - self.height() // 2)
 
-        # 待着时的呼吸
-        if self.mode == "idle" and not self._act:
-            self._bob = (self._bob + 1) % 60
-            self.label.move(0, -1 if self._bob < 30 else 0)
+        # 3) 动作时间轴
+        lift = 0.0
+        if self._act:
+            p = (now - self._act_start) / max(0.01, self._act_dur)
+            if p >= 1.0:
+                self._act = ""
+            else:
+                name = self._act
+                if name == "jump":
+                    lift = 20 * math.sin(math.pi * p)
+                elif name == "surprised":
+                    lift = 14 * math.sin(math.pi * min(1.0, p * 1.6))
+                elif name == "happy":
+                    lift = 16 * abs(math.sin(math.pi * p * 2))
+                elif name == "shake" or name == "angry":
+                    dx = 5 * math.sin(p * math.pi * 8) * (1 - p)
+                elif name == "wave":
+                    dx = 3 * math.sin(p * math.pi * 10) * (1 - p)
+                elif name == "sad":
+                    dy = 4 * math.sin(p * math.pi)
+                elif name == "sleepy":
+                    dy = 2.5 * math.sin(p * math.pi * 2)
+        self._lift = lift
 
-        # 气泡跟着桌宠走（拖动、散步、跟随都覆盖）
+        # 4) 呼吸（待着时更明显）
+        amp = self.BREATH_AMP * (1.4 if self.mode == "idle" else 1.0)
+        if not self._act:
+            dy += math.sin(t / self.BREATH_PERIOD * 2 * math.pi) * amp
+
+        # 5) 眨眼
+        if "blink" in self.sprites:
+            if now >= self._blink_at and now > self._blink_until:
+                self._blink_until = now + 0.11
+                self._set_sprite("blink")
+            elif self._blink_until and now > self._blink_until:
+                self._blink_until = 0.0
+                self._set_sprite(self.facing)
+                self._blink_at = now + random.uniform(2.2, 6.5)
+
+        # 6) 说话时轻微点头
+        speaking = False
+        if self.player is not None:
+            try:
+                speaking = self.player.playbackState() == QMediaPlayer.PlaybackState.PlayingState
+            except Exception:
+                speaking = False
+        if speaking:
+            dy += 1.5 * math.sin(t * 2 * math.pi * 5.0)
+
+        # 7) 待机小动作
+        if not self._act and now > self._fidget_at:
+            self._fidget_at = now + random.uniform(14.0, 30.0)
+            self._do_action(random.choice(["wave", "stretch", "happy"]))
+
+        # 8) 落地压扁 / 无素材时的"眨眼"（整体轻微压缩）
+        scale_y = 1.0
+        if now < self._squash_until:
+            scale_y = 1.0 - 0.05 * ((self._squash_until - now) / 0.18)
+        if self._blink_until and now < self._blink_until and "blink" not in self.sprites:
+            scale_y = min(scale_y, 0.93)
+        if scale_y < 0.999:
+            h = max(1, int(self.base_h * scale_y))
+            self.label.setPixmap(self.base_pix.scaled(self.base_w, h,
+                                                      Qt.AspectRatioMode.IgnoreAspectRatio,
+                                                      Qt.TransformationMode.SmoothTransformation))
+        elif self.label.pixmap().height() != self.base_h:
+            self._set_sprite("blink" if self._blink_until else self.facing)
+
+        self.label.move(int(dx), int(self.LIFT_SPACE + dy - lift))
         self._follow_bubble()
+        self.update()          # 阴影随动作重绘
 
-        # 桥通知
-        if not self.bridge.online and now - getattr(self, "_offline_hint", 0) > 30:
-            self._offline_hint = now
-            log("没连上插件桥，检查 base_url：" + str(self.cfg.get("base_url")))
 
     def _drain(self) -> None:
         handled = 0
@@ -635,7 +778,6 @@ class Pet(QWidget):
         self.target = QPoint(nx, ny)
         self.facing = "side" if dx else self.facing
         self.label.setPixmap(self.sprites[self.facing])
-
 
 def main() -> int:
     cfg = load_config()

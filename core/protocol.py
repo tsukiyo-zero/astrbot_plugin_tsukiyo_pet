@@ -16,6 +16,11 @@ ACTIONS: dict[str, str] = {
     "idle": "待着",
     "wander": "散步",
     "follow": "跟着鼠标",
+    "happy": "开心",
+    "sad": "难过",
+    "angry": "生气",
+    "surprised": "惊讶",
+    "sleepy": "困",
 }
 
 #: 移动指令的合法方向（客户端自己算坐标，插件只传意图）
