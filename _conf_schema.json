@@ -1,0 +1,84 @@
+{
+  "owner_id": {
+    "description": "主人 ID",
+    "type": "string",
+    "default": "",
+    "hint": "填你的发送者 ID：aiocqhttp(NapCat) 填数字 QQ 号；qq_official(官方机器人) 填 openid 那串（日志里 [default] [大肥鱼(qq_official)] 后面的就是）。留空则绑定本次运行第一个私聊的人。"
+  },
+  "bubble_enabled": {
+    "description": "把 QQ 回复同步成桌宠气泡",
+    "type": "bool",
+    "default": true,
+    "hint": "只同步主人私聊的回复；不影响 QQ 正常回复。"
+  },
+  "bubble_max_chars": {
+    "description": "气泡每段字数上限",
+    "type": "int",
+    "default": 40,
+    "hint": "按标点自动分段，超过会换行显示。范围 1~200。"
+  },
+  "bridge": {
+    "description": "桌宠桥（HTTP）",
+    "type": "object",
+    "hint": "桌宠客户端通过这个端口连插件。Docker 部署要把它映射出来，并把 public_base 改成宿主能访问的地址。",
+    "items": {
+      "host": {
+        "description": "监听地址",
+        "type": "string",
+        "default": "0.0.0.0"
+      },
+      "port": {
+        "description": "监听端口",
+        "type": "int",
+        "default": 18790
+      },
+      "public_base": {
+        "description": "客户端访问用的基地址",
+        "type": "string",
+        "default": "http://127.0.0.1:18790",
+        "hint": "语音文件 URL 前缀。容器部署填宿主映射后的地址，例如 http://127.0.0.1:18790。"
+      }
+    }
+  },
+  "tts": {
+    "description": "语音（GPT-SoVITS，可选）",
+    "type": "object",
+    "hint": "开启后 /pet say 与 QQ 回复同步都会先合成语音再推送，桌宠边冒气泡边说话。",
+    "items": {
+      "enabled": {
+        "description": "启用语音",
+        "type": "bool",
+        "default": false
+      },
+      "endpoint": {
+        "description": "SoVITS 接口",
+        "type": "string",
+        "default": "http://host.docker.internal:9880/tts",
+        "hint": "容器内访问宿主机的 SoVITS 用 host.docker.internal；Windows 原生部署用 http://127.0.0.1:9880/tts。"
+      },
+      "ref_audio_path": {
+        "description": "参考音频路径",
+        "type": "string",
+        "default": "",
+        "hint": "必须是插件运行环境能读到的路径。Docker 部署建议把 wav 放进 data/plugin_data/astrbot_plugin_tsukiyo_pet/ 再填容器内绝对路径。"
+      },
+      "prompt_text": {
+        "description": "参考音频对应文本",
+        "type": "string",
+        "default": "",
+        "hint": "必须和参考音频逐字一致，否则音色会飘。"
+      },
+      "prompt_lang": {
+        "description": "参考音频语言",
+        "type": "string",
+        "default": "zh"
+      },
+      "speed_factor": {
+        "description": "语速",
+        "type": "float",
+        "default": 0.9,
+        "hint": "1.0 = 模型自然语速。实测叙事用 0.9、正常对话 0.95、抒情 0.82。"
+      }
+    }
+  }
+}

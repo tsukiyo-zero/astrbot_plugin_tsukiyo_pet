@@ -1,0 +1,9 @@
+{
+  "client_id": "desktop-pet",
+  "base_url": "http://127.0.0.1:18790",
+  "scale": 1.0,
+  "poll_ms": 500,
+  "heartbeat_s": 5,
+  "bubble_ms": 2800,
+  "speed_px": 26
+}

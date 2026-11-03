@@ -1,0 +1,6 @@
+﻿__pycache__/
+*.pyc
+.test_tmp/
+client/.cache_audio.wav
+client/.cache_audio.wav
+*.log
