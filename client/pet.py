@@ -17,6 +17,7 @@ import os
 import queue
 import random
 import sys
+import tempfile
 import threading
 import time
 import urllib.error
@@ -37,6 +38,21 @@ except Exception:  # pragma: no cover - 没装 QtMultimedia 也能跑
 ROOT = Path(__file__).resolve().parent
 CONFIG = ROOT / "config.json"
 SPRITES = ROOT / "sprites"
+LOG_PATH = Path(os.environ.get("TEMP") or tempfile.gettempdir()) / "tsukiyo_pet_client.log"
+
+
+def log(msg: str) -> None:
+    """客户端诊断日志：优先写客户端目录，不行再写系统临时目录。没声音时先看它。"""
+    line = f"{time.strftime('%H:%M:%S')} {msg}\n"
+    print(line, end="", flush=True)
+    for target in (ROOT / "client.log", LOG_PATH):
+        try:
+            with target.open("a", encoding="utf-8") as fh:
+                fh.write(line)
+            return
+        except OSError:
+            continue
+
 
 DEFAULTS = {
     "client_id": os.environ.get("COMPUTERNAME", "pc") + "-pet",
@@ -123,7 +139,7 @@ class Bridge:
                     self.online = False
                     self.events.put({"kind": "_offline"})
             except Exception as exc:  # pragma: no cover - 兜底，别让线程死掉
-                print("桥通信异常：", exc)
+                log("桥通信异常：" + str(exc))
                 self.online = False
             self._stop.wait(self.poll_ms / 1000.0)
 
@@ -314,19 +330,26 @@ class Pet(QWidget):
         self.bubble_timer.start(int(self.cfg.get("bubble_ms") or 2800))
 
     def _speak(self, url: str) -> None:
-        if not (HAS_AUDIO and self.player and url):
+        """播放语音：优先直接流式播放 URL（不落盘，避免目录不可写的问题）。"""
+        if not url:
+            log('speak: url 为空')
             return
-        path = url
-        if url.startswith("http"):
-            local = ROOT / ".cache_audio.wav"
-            try:
-                urllib.request.urlretrieve(url, local)
-                path = str(local)
-            except Exception as exc:
-                print("语音下载失败：", exc)
-                return
-        self.player.setSource(QUrl.fromLocalFile(path))
-        self.player.play()
+        if not HAS_AUDIO:
+            log('speak: 缺少 QtMultimedia，装 PySide6 完整版')
+            return
+        if not self.player:
+            log('speak: 播放器未初始化')
+            return
+        log('speak: ' + str(url))
+        try:
+            if url.startswith("http"):
+                self.player.setSource(QUrl(url))
+            else:
+                self.player.setSource(QUrl.fromLocalFile(url))
+            self.player.play()
+            log('speak: play() 之后 state=' + str(self.player.playbackState()))
+        except Exception as exc:  # pragma: no cover - 播放失败不影响气泡
+            log("语音播放失败：" + str(exc))
 
     def _start_wander(self) -> None:
         screen = QApplication.primaryScreen().availableGeometry()
@@ -378,7 +401,7 @@ class Pet(QWidget):
         # 桥通知
         if not self.bridge.online and now - getattr(self, "_offline_hint", 0) > 30:
             self._offline_hint = now
-            print("[pet] 没连上插件桥，检查 base_url：", self.cfg.get("base_url"))
+            log("没连上插件桥，检查 base_url：" + str(self.cfg.get("base_url")))
 
     def _drain(self) -> None:
         handled = 0
@@ -442,3 +465,5 @@ def main() -> int:
 
 if __name__ == "__main__":
     sys.exit(main())
+
+

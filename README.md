@@ -106,6 +106,27 @@ python pet.py
 > 容器里访问宿主机的 GPT-SoVITS 用 `host.docker.internal`；参考音频路径必须是**插件所在环境**能读到的路径，
 > 所以 Docker 部署时建议把参考音频放进 `data/plugin_data/astrbot_plugin_tsukiyo_pet/` 再填容器内路径。
 
+## 排错
+
+| 现象 | 先看什么 |
+|---|---|
+| 桌宠不出现 | 客户端窗口起来没有：看 `client/client.log`；没日志说明 Python 崩在启动阶段，命令行手跑 `python client/pet.py` 看报错 |
+| 桌宠在但没反应 | 浏览器/终端访问 `http://127.0.0.1:18790/pet/health`，`online` 应为 1；不是 1 说明客户端没连上（检查 `client/config.json` 的 `base_url`） |
+| 有气泡没声音 | 看 `client/client.log` 里的 `speak:` 行；再确认 `tts.enabled=true`、SoVITS 在 9880 跑着、`ref_audio_path` 是**SoVITS 所在机器**能读到的路径 |
+| 改了配置不生效 | 先 `/pet stop`（或关客户端），保存配置并重载插件，再 `/pet start` |
+| 抖音式提示"仅限主人" | `owner_id` 没填或填错；官方机器人要填 openid 那串，不是 QQ 号 |
+
+调试可以直接往桥推一条（不需要 QQ）：
+
+```powershell
+POST http://127.0.0.1:18790/pet/push
+{"text": "测试气泡"}
+{"action": "jump"}
+{"audio": "hello.wav", "text": "带声音的气泡"}   # hello.wav 放在插件音频目录
+```
+
+`/pet/health` 里的 `audio_hits` 会随客户端取声音而增加，可用来确认声音链路通不通。
+
 ## 许可
 
 MIT。三视图素材来自 [1190fasheqi/dafeiyu-pet](https://github.com/1190fasheqi/dafeiyu-pet)（MIT），署名见 `CREDITS.md`。

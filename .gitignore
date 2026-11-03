@@ -4,3 +4,4 @@
 client/.cache_audio.wav
 client/.cache_audio.wav
 *.log
+client/client.log

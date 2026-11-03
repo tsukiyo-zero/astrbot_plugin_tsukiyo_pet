@@ -28,15 +28,21 @@ from .protocol import parse_event
 class PetHTTP:
     def __init__(self, hub: Hub, *, host: str = "0.0.0.0", port: int = 18790,
                  audio_dir: Path | None = None, push_token: str = "",
+                 public_base: str = "http://127.0.0.1:18790",
                  log: Callable[[str], None] | None = None) -> None:
         self.hub = hub
         self.host = host
         self.port = int(port)
         self.audio_dir = Path(audio_dir) if audio_dir else None
         self.push_token = str(push_token or "")
+        self.public_base = str(public_base or "http://127.0.0.1:18790").rstrip("/")
         self._log = log or (lambda _msg: None)
         self._server: ThreadingHTTPServer | None = None
         self._thread: threading.Thread | None = None
+        self.audio_hits = 0
+
+    def audio_url(self, name: str) -> str:
+        return f"{self.public_base}/pet/audio/{Path(name).name}"
 
     # ---------- 生命周期 ----------
     def start(self) -> None:
@@ -83,6 +89,7 @@ class PetHTTP:
                     self._send(404, {"ok": False, "error": "没有这个文件"})
                     return
                 data = target.read_bytes()
+                api.audio_hits += 1
                 ctype = mimetypes.guess_type(str(target))[0] or "application/octet-stream"
                 self.send_response(200)
                 self.send_header("Content-Type", ctype)
@@ -96,7 +103,8 @@ class PetHTTP:
                 query = parse_qs(urlparse(self.path).query)
                 if path == "/pet/health":
                     snap = api.hub.snapshot()
-                    self._send(200, {"ok": True, "online": snap["online"], "clients": snap["clients"]})
+                    self._send(200, {"ok": True, "online": snap["online"],
+                                     "clients": snap["clients"], "audio_hits": api.audio_hits})
                     return
                 if path == "/pet/poll":
                     cid = (query.get("client_id") or [""])[0]
@@ -145,7 +153,14 @@ class PetHTTP:
                     from . import protocol as _protocol
 
                     item = None
-                    if body.get("text"):
+                    if body.get("audio"):
+                        name = Path(str(body["audio"])).name
+                        if api.audio_dir is not None and (api.audio_dir / name).is_file():
+                            item = _protocol.speak(api.audio_url(name), str(body.get("text") or ""))
+                        else:
+                            self._send(404, {"ok": False, "error": f"audio 目录里没有 {name}"})
+                            return
+                    elif body.get("text"):
                         item = _protocol.bubble(str(body["text"]))
                     elif body.get("action"):
                         item = _protocol.action(str(body["action"]))

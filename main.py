@@ -61,6 +61,7 @@ class TsukiyoPetPlugin(Star):
         port = int(bridge.get("port") or 18790)
         self.http = PetHTTP(self.hub, host=host, port=port, audio_dir=self.audio_dir,
                             push_token=str(bridge.get("push_token") or ""),
+                            public_base=str(bridge.get("public_base") or "http://127.0.0.1:18790"),
                             log=lambda m: logger.info("[tsukiyo_pet] %s", m))
         try:
             self.http.start()
