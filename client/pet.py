@@ -40,20 +40,46 @@ except Exception:  # pragma: no cover - 没装 QtMultimedia 也能跑
 ROOT = Path(__file__).resolve().parent
 CONFIG = ROOT / "config.json"
 SPRITES = ROOT / "sprites"
-LOG_PATH = Path(os.environ.get("TEMP") or tempfile.gettempdir()) / "tsukiyo_pet_client.log"
+
+
+def _pick_log_path() -> Path | None:
+    """挑一个真的能写的日志文件；一个都挑不到就不记文件（绝不因为日志挂掉）。"""
+    for base in (os.environ.get("TEMP"), os.environ.get("TMP"), str(ROOT), "."):
+        if not base:
+            continue
+        candidate = Path(base) / "tsukiyo_pet_client.log"
+        try:
+            with candidate.open("a", encoding="utf-8"):
+                return candidate
+        except OSError:
+            continue
+    return None
+
+
+LOG_PATH = _pick_log_path()
+_log_state = {"t": 0.0, "last": ""}
 
 
 def log(msg: str) -> None:
-    """客户端诊断日志：优先写客户端目录，不行再写系统临时目录。没声音时先看它。"""
-    line = f"{time.strftime('%H:%M:%S')} {msg}\n"
-    print(line, end="", flush=True)
-    for target in (ROOT / "client.log", LOG_PATH):
-        try:
-            with target.open("a", encoding="utf-8") as fh:
-                fh.write(line)
-            return
-        except OSError:
-            continue
+    """客户端诊断日志：只写能写的目录，1 秒内相同内容只记一次，绝不抛异常、绝不阻塞 UI。"""
+    now = time.time()
+    text = str(msg)
+    if text == _log_state["last"] and now - _log_state["t"] < 1.0:
+        return
+    _log_state["t"] = now
+    _log_state["last"] = text
+    line = f"{time.strftime('%H:%M:%S')} {text}\n"
+    try:
+        print(line, end="", flush=True)
+    except Exception:  # pythonw 没有控制台
+        pass
+    if LOG_PATH is None:
+        return
+    try:
+        with LOG_PATH.open("a", encoding="utf-8") as fh:
+            fh.write(line)
+    except Exception:
+        pass
 
 
 DEFAULTS = {
@@ -188,8 +214,17 @@ class Bubble(QWidget):
         self._text = ""
         self._wrapped = ""
         self._tail_x = 40
-        self._fade = QPropertyAnimation(self, b"windowOpacity", self)
-        self._fade.setDuration(120)
+        # 淡入 / 淡出各用独立动画：共用同一个动画会让 finished 信号串台
+        # （淡入结束也会触发 hide，气泡就"一闪而逝"）
+        self._fade_in = QPropertyAnimation(self, b"windowOpacity", self)
+        self._fade_in.setDuration(120)
+        self._fade_in.setStartValue(0.0)
+        self._fade_in.setEndValue(1.0)
+        self._fade_out = QPropertyAnimation(self, b"windowOpacity", self)
+        self._fade_out.setDuration(140)
+        self._fade_out.setStartValue(1.0)
+        self._fade_out.setEndValue(0.0)
+        self._fade_out.finished.connect(self.hide)
         self._hide_timer = QTimer(self)
         self._hide_timer.setSingleShot(True)
         self._hide_timer.timeout.connect(self.fade_out)
@@ -303,21 +338,23 @@ class Bubble(QWidget):
             return
         self.set_text(text)
         self.move_near(anchor)
+        self._hide_timer.stop()
+        self._fade_out.stop()
+        self._fade_in.stop()
         self.setWindowOpacity(0.0)
         self.show()
         self.raise_()
-        self._fade.stop()
-        self._fade.setStartValue(0.0)
-        self._fade.setEndValue(1.0)
-        self._fade.start()
+        self._fade_in.start()
         self._hide_timer.start(max(800, int(hold_ms)))
 
     def fade_out(self) -> None:
-        self._fade.stop()
-        self._fade.setStartValue(self.windowOpacity())
-        self._fade.setEndValue(0.0)
-        self._fade.finished.connect(self.hide)
-        self._fade.start()
+        if not self.isVisible():
+            return
+        self._hide_timer.stop()
+        self._fade_in.stop()
+        self._fade_out.stop()
+        self._fade_out.setStartValue(float(self.windowOpacity() or 1.0))
+        self._fade_out.start()
 
     @property
     def visible_text(self) -> str:
